@@ -1,0 +1,28 @@
+# Environment variables and secrets
+.env
+auth.key
+*.key
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local runtime storage and SQLite databases
+storage/*.db
+storage/*.db-journal
+storage/*.db-wal
+storage/*.db-shm
+storage/biometrics/*
+!storage/biometrics/.gitkeep
+storage/encrypted_files/*
+!storage/encrypted_files/.gitkeep
+storage/stego_images/*
+!storage/stego_images/.gitkeep
+storage/mock_usb/
+storage/demo_samples/
+

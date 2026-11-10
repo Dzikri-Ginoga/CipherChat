@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel
 
+from backend.dependencies import require_active_dongle
 from backend.repositories.asset_repo import (
     get_chain_with_verification,
     list_assets,
@@ -15,7 +16,11 @@ from backend.repositories.asset_repo import (
 )
 from backend.routers.auth_router import require_authenticated_user
 
-router = APIRouter(prefix="/api/v1/assets", tags=["assets"])
+router = APIRouter(
+    prefix="/api/v1/assets",
+    tags=["assets"],
+    dependencies=[Depends(require_active_dongle)],
+)
 
 
 class TransferAssetRequest(BaseModel):

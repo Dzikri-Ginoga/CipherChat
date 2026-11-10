@@ -12,7 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import streamlit as st
 
 from backend.config import load_config
-from backend.core.dongle_auth import DongleStatus, verify_usb_dongle
+from backend.core.dongle_auth import DongleStatus, is_dongle_connected, verify_usb_dongle
 from backend.core.stego_engine import extract_lsb
 from backend.database import init_db
 from backend.repositories.asset_repo import (
@@ -76,14 +76,39 @@ def _init_session_state() -> None:
         st.session_state["chain_verification_result"] = None
 
 
+def _handle_dongle_removal(detail_message: str | None = None) -> None:
+    """Clear session and redirect to login when physical USB dongle is removed."""
+    st.session_state.clear()
+    st.session_state["dongle_removed_alert"] = True
+    if detail_message:
+        st.session_state["dongle_removed_detail"] = detail_message
+    st.error("Kunci hardware (dongle) terlepas! Sesi Anda telah dikunci demi keamanan.")
+    st.rerun()
+
+
+def _handle_action_error(exc: Exception) -> None:
+    """Handle action errors: if dongle is detached or error is 403 / PermissionError on dongle, auto-lock."""
+    cfg = load_config()
+    status_code = getattr(exc, "status_code", None)
+    err_str = str(exc).lower()
+    if (
+        not is_dongle_connected(mock_dir=cfg.dongle_mock_dir if cfg.dongle_mock_dir else None)
+        or status_code == 403
+        or ("dongle" in err_str and ("tidak terdeteksi" in err_str or "unplugged" in err_str or "not detected" in err_str))
+    ):
+        _handle_dongle_removal(str(exc))
+    st.error(str(exc))
+
+
 def _require_login() -> dict:
     """Re-verify live USB dongle and active login session before rendering protected pages."""
+    cfg = load_config()
+    if not is_dongle_connected(mock_dir=cfg.dongle_mock_dir if cfg.dongle_mock_dir else None):
+        _handle_dongle_removal()
+
     live_dongle = _check_live_dongle()
     if not live_dongle.detected:
-        st.session_state["authenticated"] = False
-        st.session_state["current_user"] = None
-        st.error(live_dongle.message)
-        st.stop()
+        _handle_dongle_removal()
 
     if not st.session_state.get("authenticated") or not st.session_state.get("current_user"):
         st.warning(
@@ -267,7 +292,7 @@ def render_page_2_text_messages() -> None:
                         f"Lapisan Penyimpanan: {sent['storage_layers']})."
                     )
                 except (ValueError, PermissionError) as exc:
-                    st.error(str(exc))
+                    _handle_action_error(exc)
 
     st.markdown("---")
     st.subheader("Kotak Masuk dan Riwayat Pesan Teks")
@@ -276,7 +301,7 @@ def render_page_2_text_messages() -> None:
             user_id=current_user["id"], enforce_dongle_for_important=True
         )
     except PermissionError as exc:
-        st.error(str(exc))
+        _handle_action_error(exc)
         return
     text_messages = [m for m in all_messages if m["msg_type"] == "TEXT"]
 
@@ -339,7 +364,7 @@ def render_page_2_text_messages() -> None:
             st.markdown("**5. Hasil Dekripsi Kembali:**")
             st.code(inspection["decrypted_back"], language="text")
         except (ValueError, PermissionError) as exc:
-            st.error(str(exc))
+            _handle_action_error(exc)
 
 
 def render_page_3_file_messages() -> None:
@@ -387,7 +412,7 @@ def render_page_3_file_messages() -> None:
                             f"dan disimpan ke '{sent['file_path']}' (ID Pesan: #{sent['id']})."
                         )
                     except (ValueError, PermissionError) as exc:
-                        st.error(str(exc))
+                        _handle_action_error(exc)
 
     st.markdown("---")
     st.subheader("Daftar Pesan File Terenkripsi (.enc)")
@@ -435,7 +460,7 @@ def render_page_3_file_messages() -> None:
                     key=f"btn_download_file_{msg['id']}",
                 )
             except (ValueError, PermissionError, FileNotFoundError) as exc:
-                st.error(str(exc))
+                _handle_action_error(exc)
 
 
 def render_page_4_stego_messages() -> None:
@@ -499,7 +524,7 @@ def render_page_4_stego_messages() -> None:
                             f"(ID Pesan: #{sent['id']}, Lokasi: {sent['stego_image_path']})."
                         )
                     except (ValueError, PermissionError) as exc:
-                        st.error(str(exc))
+                        _handle_action_error(exc)
 
         if st.session_state.get("last_stego_send_result") is not None:
             res = st.session_state["last_stego_send_result"]
@@ -562,7 +587,7 @@ def render_page_4_stego_messages() -> None:
                     st.success("Pesan rahasia berhasil diekstraksi dari LSB PNG:")
                     st.code(revealed["secret_message"], language="text")
                 except (ValueError, PermissionError, FileNotFoundError) as exc:
-                    st.error(str(exc))
+                    _handle_action_error(exc)
 
         st.markdown("---")
         st.markdown("**Opsi 2: Unggah File Stego `.png` Secara Langsung (Alat Demo)**")
@@ -669,7 +694,7 @@ def render_page_5_blockchain_assets() -> None:
                             f"ditransfer ke '{new_owner}' pada Blok #{res['block']['block_index']}."
                         )
                     except (ValueError, PermissionError) as exc:
-                        st.error(str(exc))
+                        _handle_action_error(exc)
 
     st.markdown("---")
     st.subheader("Daftar Aset Terdaftar")
@@ -753,6 +778,16 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     _init_session_state()
+
+    # Dongle Removal Request Guard: Auto-Lock on Action
+    cfg = load_config()
+    is_connected = is_dongle_connected(mock_dir=cfg.dongle_mock_dir if cfg.dongle_mock_dir else None)
+    if st.session_state.get("authenticated") is True:
+        if not is_connected:
+            _handle_dongle_removal()
+
+    if st.session_state.pop("dongle_removed_alert", False):
+        st.error("Kunci hardware (dongle) terlepas! Sesi Anda telah dikunci demi keamanan.")
 
     dongle_status = _check_live_dongle()
 

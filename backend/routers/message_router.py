@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from backend.dependencies import require_active_dongle
 from backend.repositories.message_repo import (
     inspect_stored_text_message,
     list_inbox_messages,
@@ -15,7 +16,11 @@ from backend.repositories.message_repo import (
 from backend.repositories.user_repo import get_user_by_username
 from backend.routers.auth_router import require_authenticated_user
 
-router = APIRouter(prefix="/api/v1/messages", tags=["messages"])
+router = APIRouter(
+    prefix="/api/v1/messages",
+    tags=["messages"],
+    dependencies=[Depends(require_active_dongle)],
+)
 
 
 class SendTextMessageRequest(BaseModel):

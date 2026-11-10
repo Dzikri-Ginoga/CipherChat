@@ -8,7 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile, status
 
 from backend.config import load_config
-from backend.core.dongle_auth import verify_usb_dongle
+from backend.core.dongle_auth import is_dongle_connected, verify_usb_dongle
+from backend.dependencies import require_active_dongle
 from backend.repositories.user_repo import (
     authenticate_user,
     get_all_dongle_hashes,
@@ -56,16 +57,15 @@ def require_authenticated_user(
 @router.get("/dongle-status")
 def get_dongle_status() -> dict[str, Any]:
     """Check whether a valid USB dongle with auth.key is currently plugged in."""
-    cfg = load_config()
-    registered_hashes = get_all_dongle_hashes()
-    dongle_status = verify_usb_dongle(
-        expected_hashes=registered_hashes if registered_hashes else None,
-        bootstrap_hash_hex=cfg.dongle_bootstrap_hash_hex,
-    )
+    connected = is_dongle_connected()
     return {
-        "detected": dongle_status.detected,
-        "mountpoint": dongle_status.mountpoint,
-        "message": dongle_status.message,
+        "connected": connected,
+        "detected": connected,
+        "message": (
+            "USB Dongle (auth.key) terdeteksi"
+            if connected
+            else "USB Dongle (auth.key) tidak terdeteksi"
+        ),
     }
 
 

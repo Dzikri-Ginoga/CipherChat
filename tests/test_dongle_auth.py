@@ -131,6 +131,7 @@ def test_database_init_and_three_factor_authentication(
 
     _, _, token_hash = generate_dongle_key(usb_dir)
     monkeypatch.setenv("CIPHERCHAT_DONGLE_MOCK_DIR", str(usb_dir))
+    monkeypatch.setenv("CIPHERCHAT_FACE_MATCH_THRESHOLD", "0.75")
 
     face_bytes_alice = _make_synthetic_face_png_bytes(seed=101)
     face_bytes_stranger = _make_synthetic_face_png_bytes(seed=999)
@@ -283,6 +284,7 @@ def test_fastapi_routers_session_and_startup_gate(
     # 2. Mount valid USB dongle and verify startup gate succeeds
     _, _, token_hash = generate_dongle_key(usb_dir)
     monkeypatch.setenv("CIPHERCHAT_DONGLE_MOCK_DIR", str(usb_dir))
+    monkeypatch.setenv("CIPHERCHAT_FACE_MATCH_THRESHOLD", "0.75")
     monkeypatch.setenv("CIPHERCHAT_DONGLE_BOOTSTRAP_HASH_HEX", token_hash)
     reset_dongle_middleware_cache()
     clear_all_sessions()
@@ -708,6 +710,105 @@ def test_empty_mock_dir_and_no_usb_flashdrive_returns_detected_false(
 
     exit_code = run_app_main(["--check-only", "--db-path", str(tmp_path / "no_usb.db")])
     assert exit_code == 1
+
+
+def test_is_dongle_connected_detection_and_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify is_dongle_connected returns True when key exists and False when removed."""
+    from backend.core.dongle_auth import is_dongle_connected
+    from scripts.generate_dongle_key import generate_dongle_key
+
+    usb_mock = tmp_path / "usb_removable"
+    usb_mock.mkdir()
+    empty_mock = tmp_path / "usb_empty"
+    empty_mock.mkdir()
+
+    # 1. Empty directory has no dongle
+    monkeypatch.setenv("CIPHERCHAT_DONGLE_MOCK_DIR", str(empty_mock))
+    assert is_dongle_connected() is False
+    assert is_dongle_connected(mock_dir=empty_mock) is False
+
+    # 2. Key generated in directory
+    key_file, _, _ = generate_dongle_key(usb_mock)
+    monkeypatch.setenv("CIPHERCHAT_DONGLE_MOCK_DIR", str(usb_mock))
+    assert is_dongle_connected() is True
+    assert is_dongle_connected(mock_dir=usb_mock) is True
+
+    # 3. Key file removed (simulating USB dongle removal during operation)
+    key_file.unlink()
+    assert is_dongle_connected() is False
+    assert is_dongle_connected(mock_dir=usb_mock) is False
+
+
+def test_require_active_dongle_dependency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify require_active_dongle passes when dongle is connected and raises 403 when removed."""
+    from fastapi import HTTPException
+
+    from backend.dependencies import require_active_dongle
+    from scripts.generate_dongle_key import generate_dongle_key
+
+    usb_mock = tmp_path / "usb_dependency_test"
+    usb_mock.mkdir()
+    key_file, _, _ = generate_dongle_key(usb_mock)
+    monkeypatch.setenv("CIPHERCHAT_DONGLE_MOCK_DIR", str(usb_mock))
+
+    # Connected: returns True
+    assert require_active_dongle() is True
+
+    # Dongle removed: raises HTTPException 403
+    key_file.unlink()
+    with pytest.raises(HTTPException) as exc_info:
+        require_active_dongle()
+    assert exc_info.value.status_code == 403
+    assert "Security violation: Hardware dongle not detected." in exc_info.value.detail
+
+
+def test_dongle_removal_guard_blocks_protected_api_routes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify router dependencies and endpoints enforce HTTP 403 when USB dongle is removed."""
+    from fastapi import HTTPException
+
+    from backend.dependencies import require_active_dongle
+    from backend.routers.asset_router import router as asset_router
+    from backend.routers.auth_router import get_dongle_status
+    from backend.routers.file_router import router as file_router
+    from backend.routers.message_router import router as message_router
+    from backend.routers.stego_router import router as stego_router
+    from scripts.generate_dongle_key import generate_dongle_key
+
+    usb_dir = tmp_path / "guard_usb"
+    usb_dir.mkdir()
+    key_file, _, _ = generate_dongle_key(usb_dir)
+    monkeypatch.setenv("CIPHERCHAT_DONGLE_MOCK_DIR", str(usb_dir))
+
+    # 1. Verify require_active_dongle is attached as a security dependency to all protected routers
+    for r in (message_router, file_router, stego_router, asset_router):
+        deps = [d.dependency for d in r.dependencies]
+        assert require_active_dongle in deps
+
+    # 2. When dongle is plugged in, dongle-status returns connected=True
+    status_attached = get_dongle_status()
+    assert status_attached["connected"] is True
+    assert status_attached["detected"] is True
+    assert require_active_dongle() is True
+
+    # 3. Simulate dongle removal by unlinking key file
+    key_file.unlink()
+
+    # 4. dongle-status immediately reports disconnected without reading file contents
+    status_detached = get_dongle_status()
+    assert status_detached["connected"] is False
+    assert status_detached["detected"] is False
+
+    # 5. Dependency immediately blocks access with HTTP 403 Forbidden
+    with pytest.raises(HTTPException) as exc_info:
+        require_active_dongle()
+    assert exc_info.value.status_code == 403
+    assert "Security violation: Hardware dongle not detected." in exc_info.value.detail
 
 
 

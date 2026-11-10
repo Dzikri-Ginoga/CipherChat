@@ -34,6 +34,32 @@ def compute_dongle_token_hash(raw_token: str) -> str:
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
 
 
+def is_dongle_connected(
+    dongle_filename: str | None = None,
+    mock_dir: str | Path | None = None,
+) -> bool:
+    """Check if the physical USB dongle key file is present on any mounted candidate drive.
+
+    This check is non-blocking and lightweight: it verifies file existence only without
+    reading or hashing the file contents to avoid I/O latency on repeated requests.
+    """
+    filename = (
+        dongle_filename.strip()
+        if dongle_filename and dongle_filename.strip()
+        else os.environ.get("CIPHERCHAT_DONGLE_FILENAME", DEFAULT_DONGLE_FILENAME).strip()
+        or DEFAULT_DONGLE_FILENAME
+    )
+    candidates = _resolve_candidate_mountpoints(mock_dir=mock_dir)
+    for mountpoint in candidates:
+        try:
+            key_file = mountpoint / filename
+            if key_file.is_file():
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def _resolve_candidate_mountpoints(mock_dir: str | Path | None = None) -> list[Path]:
     """Return candidate directories to inspect for auth.key."""
     _ensure_env_loaded()

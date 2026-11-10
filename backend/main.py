@@ -71,33 +71,11 @@ app.add_middleware(
 )
 
 
-@app.middleware("http")
-async def dongle_presence_middleware(request: Request, call_next):
-    """Re-check USB dongle presence and return HTTP 423 if unplugged or mismatched."""
-    global _last_dongle_check_ts, _last_dongle_detected, _last_dongle_message
-
-    if request.url.path == "/api/v1/auth/dongle-status":
-        return await call_next(request)
-
-    now = time.monotonic()
-    if now - _last_dongle_check_ts >= _DONGLE_CACHE_TTL_SECONDS:
-        cfg = load_config()
-        registered_hashes = get_all_dongle_hashes()
-        status = verify_usb_dongle(
-            expected_hashes=registered_hashes if registered_hashes else None,
-            bootstrap_hash_hex=cfg.dongle_bootstrap_hash_hex,
-        )
-        _last_dongle_detected = status.detected
-        _last_dongle_message = status.message
-        _last_dongle_check_ts = now
-
-    if not _last_dongle_detected:
-        return JSONResponse(
-            status_code=423,
-            content={"detail": _last_dongle_message},
-        )
-
-    return await call_next(request)
+@app.get("/api/auth/dongle-status", tags=["auth"])
+def api_dongle_status_endpoint():
+    """Lightweight endpoint returning boolean presence of USB dongle."""
+    from backend.routers.auth_router import get_dongle_status
+    return get_dongle_status()
 
 
 app.include_router(auth_router)

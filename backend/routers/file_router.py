@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
 
+from backend.dependencies import require_active_dongle
 from backend.repositories.message_repo import (
     download_decrypted_file_message,
     get_file_raw_preview,
@@ -14,7 +15,11 @@ from backend.repositories.message_repo import (
 from backend.repositories.user_repo import get_user_by_username
 from backend.routers.auth_router import require_authenticated_user
 
-router = APIRouter(prefix="/api/v1/files", tags=["files"])
+router = APIRouter(
+    prefix="/api/v1/files",
+    tags=["files"],
+    dependencies=[Depends(require_active_dongle)],
+)
 
 
 @router.post("/send", status_code=status.HTTP_201_CREATED)

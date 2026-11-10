@@ -7,11 +7,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from backend.core.stego_engine import extract_lsb
+from backend.dependencies import require_active_dongle
 from backend.repositories.message_repo import reveal_image_message, send_image_message
 from backend.repositories.user_repo import get_user_by_username
 from backend.routers.auth_router import require_authenticated_user
 
-router = APIRouter(prefix="/api/v1/stego", tags=["stego"])
+router = APIRouter(
+    prefix="/api/v1/stego",
+    tags=["stego"],
+    dependencies=[Depends(require_active_dongle)],
+)
 
 
 @router.post("/send", status_code=status.HTTP_201_CREATED)

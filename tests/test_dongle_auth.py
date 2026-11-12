@@ -811,6 +811,84 @@ def test_dongle_removal_guard_blocks_protected_api_routes(
     assert "Security violation: Hardware dongle not detected." in exc_info.value.detail
 
 
+def test_sync_dongle_utility_to_usb_and_from_usb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that sync_dongle utility properly copies to and from target USB drive."""
+    from backend.core.dongle_auth import compute_dongle_token_hash
+    from scripts.generate_dongle_key import generate_dongle_key
+    from scripts.sync_dongle import sync_dongle
+
+    mock_storage = tmp_path / "storage"
+    mock_usb = mock_storage / "mock_usb"
+    mock_usb.mkdir(parents=True)
+    target_drive = tmp_path / "flash_drive"
+    target_drive.mkdir(parents=True)
+
+    monkeypatch.setattr("scripts.sync_dongle.STORAGE_DIR", mock_storage)
+
+    # 1. Create local mock auth.key
+    _, token1, hash1 = generate_dongle_key(mock_usb)
+
+    # 2. Sync to-usb: target drive receives auth.key with hash1
+    ret_to = sync_dongle(target_drive=str(target_drive), action="to-usb")
+    assert ret_to == 0
+    usb_key = target_drive / "auth.key"
+    assert usb_key.is_file()
+    assert compute_dongle_token_hash(usb_key.read_text(encoding="utf-8").strip()) == hash1
+
+    # 3. Alter key on USB drive and sync from-usb
+    token2 = "new_random_token_1234567890abcdef1234567890abcdef"
+    hash2 = compute_dongle_token_hash(token2)
+    usb_key.write_text(token2 + "\n", encoding="utf-8")
+
+    ret_from = sync_dongle(target_drive=str(target_drive), action="from-usb")
+    assert ret_from == 0
+    local_key = mock_usb / "auth.key"
+    assert compute_dongle_token_hash(local_key.read_text(encoding="utf-8").strip()) == hash2
+
+
+def test_reset_project_with_demo_users_and_usb_drive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify reset_environment cleans data, re-creates Genesis block, and seeds demo users."""
+    import sqlite3
+    from scripts.reset_project import reset_environment
+
+    test_db = tmp_path / "cipherchat.db"
+    test_bio = tmp_path / "biometrics"
+    test_enc = tmp_path / "encrypted_files"
+    test_stego = tmp_path / "stego_images"
+    test_storage = tmp_path
+
+    monkeypatch.setattr("scripts.reset_project.DB_PATH", test_db)
+    monkeypatch.setattr("scripts.reset_project.STORAGE_DIR", test_storage)
+    monkeypatch.setattr("scripts.reset_project.BIOMETRICS_DIR", test_bio)
+    monkeypatch.setattr("scripts.reset_project.ENCRYPTED_FILES_DIR", test_enc)
+    monkeypatch.setattr("scripts.reset_project.STEGO_IMAGES_DIR", test_stego)
+
+    # Run reset with demo users enabled
+    reset_environment(include_demo_users=True)
+
+    # Verify database file was created
+    assert test_db.is_file()
+
+    conn = sqlite3.connect(test_db)
+    try:
+        users = conn.execute("SELECT username FROM users ORDER BY username ASC").fetchall()
+        assert [u[0] for u in users] == ["alice", "bob"]
+
+        # Verify Genesis block #0 exists and is valid
+        blocks = conn.execute("SELECT block_index, previous_hash FROM asset_blocks").fetchall()
+        assert len(blocks) == 1
+        assert blocks[0][0] == 0
+        assert blocks[0][1] == "0" * 64
+
+        # Verify messages and assets tables are completely empty
+        msg_count = conn.execute("SELECT count(*) FROM messages").fetchone()[0]
+        asset_count = conn.execute("SELECT count(*) FROM assets").fetchone()[0]
+        assert msg_count == 0
+        assert asset_count == 0
+    finally:
+        conn.close()
+
+
 
 
 

@@ -82,6 +82,8 @@ def prepare_demo_environment(
     base_storage_dir: Path | None = None,
     db_path: Path | None = None,
     update_dotenv: bool = True,
+    dongle_token_hash_hex: str | None = None,
+    target_usb_drive: str | Path | None = None,
 ) -> dict[str, str]:
     """Set up USB dongle, sample files, SQLite tables, and demo accounts (alice & bob)."""
     storage_root = Path(base_storage_dir) if base_storage_dir is not None else (PROJECT_ROOT / "storage")
@@ -94,13 +96,73 @@ def prepare_demo_environment(
     usb_dir.mkdir(parents=True, exist_ok=True)
     bio_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Create or reuse USB dongle auth.key
     key_file = usb_dir / "auth.key"
-    if key_file.is_file() and key_file.read_text(encoding="utf-8").strip():
-        raw_token = key_file.read_text(encoding="utf-8").strip()
-        token_hash = compute_dongle_token_hash(raw_token)
+    active_usb_path: Path | None = None
+    raw_token: str | None = None
+    token_hash: str | None = None
+
+    # Step A: Check explicit target USB drive if passed
+    if target_usb_drive is not None:
+        cand_drive = Path(str(target_usb_drive).strip().rstrip("\\/") + "\\")
+        cand_file = cand_drive / "auth.key"
+        try:
+            if cand_file.is_file():
+                content = cand_file.read_text(encoding="utf-8").strip()
+                if content:
+                    raw_token = content
+                    token_hash = compute_dongle_token_hash(content)
+                    active_usb_path = cand_file
+        except (OSError, ValueError):
+            pass
+
+    # Step B: Check mounted removable drives if base_storage_dir is None and not yet found
+    if raw_token is None and base_storage_dir is None:
+        try:
+            import psutil
+
+            for part in psutil.disk_partitions(all=False):
+                if not part.mountpoint:
+                    continue
+                opts = (part.opts or "").lower()
+                if "removable" in opts:
+                    cand_file = Path(part.mountpoint) / "auth.key"
+                    try:
+                        if cand_file.is_file():
+                            content = cand_file.read_text(encoding="utf-8").strip()
+                            if content:
+                                raw_token = content
+                                token_hash = compute_dongle_token_hash(content)
+                                active_usb_path = cand_file
+                                break
+                    except (OSError, ValueError):
+                        continue
+        except Exception:
+            pass
+
+    # Step C: Fall back to local mock_usb/auth.key or generate if missing
+    if raw_token is None:
+        if key_file.is_file() and key_file.read_text(encoding="utf-8").strip():
+            raw_token = key_file.read_text(encoding="utf-8").strip()
+            token_hash = compute_dongle_token_hash(raw_token)
+        else:
+            key_file, raw_token, token_hash = generate_dongle_key(usb_dir)
     else:
-        key_file, raw_token, token_hash = generate_dongle_key(usb_dir)
+        # Sync found token to local mock_usb/auth.key
+        key_file.write_text(raw_token + "\n", encoding="utf-8")
+
+    # If an explicit target drive was requested without auth.key, copy it there
+    if target_usb_drive is not None and active_usb_path is None:
+        cand_drive = Path(str(target_usb_drive).strip().rstrip("\\/") + "\\")
+        cand_file = cand_drive / "auth.key"
+        try:
+            cand_file.write_text(raw_token + "\n", encoding="utf-8")
+            active_usb_path = cand_file
+        except (OSError, ValueError):
+            pass
+
+    # Override token hash if explicitly requested
+    if dongle_token_hash_hex is not None and dongle_token_hash_hex.strip():
+        token_hash = dongle_token_hash_hex.strip().lower()
 
     if update_dotenv:
         _update_env_file(
@@ -128,6 +190,7 @@ def prepare_demo_environment(
             username="alice",
             password="AlicePassword123!",
             face_image_bytes=alice_face_bytes,
+            dongle_token_hash_hex=token_hash,
             db_path=db_path,
             biometrics_dir=bio_dir,
             mock_dongle_dir=usb_dir,
@@ -138,12 +201,13 @@ def prepare_demo_environment(
             username="bob",
             password="BobPassword123!",
             face_image_bytes=bob_face_bytes,
+            dongle_token_hash_hex=token_hash,
             db_path=db_path,
             biometrics_dir=bio_dir,
             mock_dongle_dir=usb_dir,
         )
 
-    return {
+    res = {
         "dongle_key_path": str(key_file),
         "dongle_token_hash": token_hash,
         "face_alice_path": str(alice_face_path),
@@ -151,6 +215,9 @@ def prepare_demo_environment(
         "cover_png_path": str(cover_png_path),
         "pdf_path": str(pdf_path),
     }
+    if active_usb_path is not None:
+        res["active_usb_path"] = str(active_usb_path)
+    return res
 
 
 if __name__ == "__main__":
